@@ -47,7 +47,7 @@ python generateAndAnalyze.py \
 | `--output-dir` | No | `instances` | Carpeta para generar archivos GraphML |
 | `--csv` | No | - | Directorio de salida para CSV (`;` -separación) |
 
-El script genenera todas las combinaciones de los `vertices x seeds x required`, siendo `--vertices 10 20 --seeds 0 1 2 --required 30 50` produce 2 x 3 x 2 = 12 instancias.
+El script genera todas las combinaciones de los `vertices x seeds x required`, siendo `--vertices 10 20 --seeds 0 1 2 --required 30 50` produce 2 x 3 x 2 = 12 instancias.
 
 ### Output
 
