@@ -1,0 +1,20 @@
+name: tfm311
+channels:
+  - conda-forge
+  - gurobi
+  - defaults
+
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - statsmodels
+  - matplotlib
+  - openpyxl
+  - gurobi
+  - pip
+  - pip:
+      - cbcbox==2.902
+      - mip==1.17
