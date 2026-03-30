@@ -40,16 +40,14 @@ python generateAndAnalyze.py \
 
 | Argumento | Requerido | Default | Descripción |
 |---|---|---|---|
-| `--vertices` | Yes | - | Lista con cascos convexos (un espacio por valor) |
+| `--vertices` | Yes | - | Lista cantidad de vértices (un espacio por valor) |
 | `--seeds` | No | `0` | Lista con random seeds (un espacio por valor) |
 | `--required` | Yes | - | Lista con ejes requeridos porcentualmente 0-100 (un espacio por valor) |
 | `--generator` | No | `1` | `1` = proximity/planar, `2` = Delaunay |
 | `--output-dir` | No | `instances` | Carpeta para generar archivos GraphML |
 | `--csv` | No | - | Directorio de salida para CSV (`;` -separación) |
 
-The script generates all combinations of `vertices x seeds x required`, so `--vertices 10 20 --seeds 0 1 2 --required 30 50` produces 2 x 3 x 2 = 12 instances.
-
-Se generan todas las combinaciones de vertices x semillas x ejes
+El script genenera todas las combinaciones de los `vertices x seeds x required`, siendo `--vertices 10 20 --seeds 0 1 2 --required 30 50` produce 2 x 3 x 2 = 12 instancias.
 
 ### Output
 
