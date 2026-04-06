@@ -34,7 +34,7 @@ class Metrics:
     avg_dist_bbox: float
     graphml_path: str
 
-    def to_string(self):
+    def to_string(self) -> str:
         values = [str(getattr(self, f.name)) for f in fields(self)]
         return ";".join(values)
 
