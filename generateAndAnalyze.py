@@ -16,7 +16,7 @@ from generateInstance2 import (
     has_single_strong_component as has_single_strong_component2,
     to_networkx as to_networkx2,
 )
-
+##TEST
 
 @dataclass
 class Metrics:
