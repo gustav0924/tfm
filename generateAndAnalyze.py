@@ -5,6 +5,7 @@ from dataclasses import dataclass, fields
 from itertools import product
 from pathlib import Path
 from random import seed as set_seed
+from scipy.spatial.distance import pdist  # <--- Añadir esta importación al inicio del archivo
 import networkx as nx
 import numpy as np
 from scipy.spatial import ConvexHull
@@ -21,14 +22,26 @@ from generateInstance2 import (
 @dataclass
 class Metrics:
     num_nodes: int
+    sqrt_num_nodes: float  # <--- NUEVA CARACTERÍSTICA
     num_edges: int
     vertices_param: int
     seed: str
     required_ratio: float
     convex_hull_area: float
+    bbox_area: float         # <--- NUEVA CARACTERÍSTICA
+    bbox_perimeter: float    # <--- NUEVA CARACTERÍSTICA
     convex_hull_perimeter: float
     width: float
     height: float
+    avg_pairwise_dist_req: float  # <--- NUEVA CARACTERÍSTICA
+    avg_dist_depot_req: float      # <--- NUEVA CARACTERÍSTICA
+    dist_depot_bbox_center: float  # <--- NUEVA CARACTERÍSTICA
+    nodes_within_50p_radius: int   # <--- NUEVA CARACTERÍSTICA
+    nodes_within_75p_radius: int   # <--- NUEVA CARACTERÍSTICA
+    req_nodes_within_50p_radius: int  # <--- NUEVA CARACTERÍSTICA
+    req_nodes_within_75p_radius: int  # <--- NUEVA CARACTERÍSTICA
+    nodes_within_50p_bbox: int        # <--- NUEVA CARACTERÍSTICA
+    nodes_within_75p_bbox: int        # <--- NUEVA CARACTERÍSTICA
     avg_dist_mean: float
     avg_dist_median: float
     avg_dist_bbox: float
@@ -97,20 +110,101 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
 
     min_x, max_x = points[:, 0].min(), points[:, 0].max()
     min_y, max_y = points[:, 1].min(), points[:, 1].max()
+# Calculamos ancho y alto una sola vez por eficiencia
+    val_width = max_x - min_x
+    val_height = max_y - min_y
+
+# 1. Identificar índices de los nodos que tocan aristas obligatorias
+    node_ids = list(g.nodes())
+    node_to_idx = {n: i for i, n in enumerate(node_ids)}
+    
+    req_indices = set()
+    for u, v, data in g.edges(data=True):
+        if int(data.get("required", 0)) == 1:
+            req_indices.add(node_to_idx[u])
+            req_indices.add(node_to_idx[v])
+
+    # El depot siempre es el primer nodo
+    depot = points[0]  # <--- LO MOVEMOS AQUÍ AFUERA
+
+
+# 1.5 Cálculos globales de densidad respecto al depot
+    dist_to_depot = np.linalg.norm(points[1:] - depot, axis=1)
+    if len(dist_to_depot) > 0:
+        max_radius = float(np.max(dist_to_depot))
+        nodes_in_50p = int(np.sum(dist_to_depot <= 0.5 * max_radius))
+        nodes_in_75p = int(np.sum(dist_to_depot <= 0.75 * max_radius)) # <--- NUEVO CÁLCULO
+    else:
+        nodes_in_50p = 0
+        nodes_in_75p = 0
+
+
+  # 2. Cálculos sobre los nodos obligatorios (req_indices)
+    if len(req_indices) > 0:
+        req_points = points[list(req_indices)]
+        
+        if len(req_indices) > 1:
+            avg_pairwise_req = float(pdist(req_points).mean())
+        else:
+            avg_pairwise_req = 0.0
+            
+        avg_depot_req = float(np.linalg.norm(req_points - depot, axis=1).mean())
+
+        # Concentración de la demanda en su propio núcleo
+        c_req = req_points.mean(axis=0)
+        dist_req_to_c = np.linalg.norm(req_points - c_req, axis=1)
+        max_radius_req = float(np.max(dist_req_to_c))
+        
+        req_in_50p = int(np.sum(dist_req_to_c <= 0.5 * max_radius_req))
+        req_in_75p = int(np.sum(dist_req_to_c <= 0.75 * max_radius_req)) # <--- NUEVO CÁLCULO
+    else:
+        avg_pairwise_req = 0.0
+        avg_depot_req = 0.0
+        req_in_50p = 0
+        req_in_75p = 0   # <--- MANEJO DE CASO VACÍO
+
+    # 3. Cálculos de centros y distancias (optimizados)
+    c_bbox = bbox_center(points)
+    c_mean = mean_center(points)
+    c_median = median_center(points)
+    
+    dist_depot_bbox = float(np.linalg.norm(depot - c_bbox))
+
+   # Densidad central respecto a la caja envolvente (BBox)
+    dist_to_c_bbox = np.linalg.norm(points - c_bbox, axis=1)
+    if len(dist_to_c_bbox) > 0:
+        max_radius_bbox = float(np.max(dist_to_c_bbox))
+        nodes_in_50p_bbox = int(np.sum(dist_to_c_bbox <= 0.5 * max_radius_bbox))
+        nodes_in_75p_bbox = int(np.sum(dist_to_c_bbox <= 0.75 * max_radius_bbox)) # <--- NUEVO CÁLCULO
+    else:
+        nodes_in_50p_bbox = 0
+        nodes_in_75p_bbox = 0 # <--- MANEJO DE CASO VACÍO
 
     return Metrics(
         num_nodes=g.number_of_nodes(),
+        sqrt_num_nodes=float(np.sqrt(g.number_of_nodes())),
         num_edges=g.number_of_edges(),
         vertices_param=vertices_param,
         seed=str(seed_value),
         required_ratio=required_ratio,
         convex_hull_area=hull.volume,
         convex_hull_perimeter=hull.area,
-        width=max_x - min_x,
-        height=max_y - min_y,
-        avg_dist_mean=avg_distance_to_center(points, mean_center(points)),
-        avg_dist_median=avg_distance_to_center(points, median_center(points)),
-        avg_dist_bbox=avg_distance_to_center(points, bbox_center(points)),
+        bbox_area=float(val_width * val_height),
+        bbox_perimeter=float(2 * (val_width + val_height)),
+        width=val_width,
+        height=val_height,
+        avg_pairwise_dist_req=avg_pairwise_req,
+        avg_dist_depot_req=avg_depot_req,
+        dist_depot_bbox_center=dist_depot_bbox,  # <--- GUARDADO DE LA MÉTRICA
+        nodes_within_50p_radius=nodes_in_50p,    # <--- GUARDADO DE LA MÉTRICA
+        nodes_within_75p_radius=nodes_in_75p,    # <--- GUARDADO DE LA MÉTRICA
+        req_nodes_within_50p_radius=req_in_50p,  # <--- GUARDADO DE LA MÉTRICA
+        req_nodes_within_75p_radius=req_in_75p,  # <--- GUARDADO DE LA MÉTRICA
+        nodes_within_50p_bbox=nodes_in_50p_bbox,  # <--- GUARDADO DE LA MÉTRICA
+        nodes_within_75p_bbox=nodes_in_75p_bbox,  # <--- GUARDADO DE LA MÉTRICA
+        avg_dist_mean=avg_distance_to_center(points, c_mean),     # (Optimizamos usando variable temporal)
+        avg_dist_median=avg_distance_to_center(points, c_median), # (Optimizamos usando variable temporal)
+        avg_dist_bbox=avg_distance_to_center(points, c_bbox),     # (Optimizamos usando variable temporal)
         graphml_path=os.path.basename(graphml_path),
     )
 
