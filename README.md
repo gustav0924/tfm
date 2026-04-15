@@ -36,7 +36,7 @@ python generateAndAnalyze.py \
   --csv results.csv
 ```
 
-### Arguments
+### Argumentos
 
 | Argumento | Requerido | Default | Descripción |
 |---|---|---|---|
@@ -76,5 +76,19 @@ Mismas columnas que output de consola separadas por `;`. Guardado en el director
 
 ### Metricas 
 
-En proceso.
+- Cantidad de nodos
+- Cantidad de ejes
+- Cantidad de vértices
+- Semilla
+- Porcentaje de ejes requeridos
+- Área casco convexo 
+- Perimetro casco convexo
+- Ancho de todas las posiciones de los nodos
+- Largo de todas las posiciones de los nodos
+- Distancia media del centroide
+- Distancia media de todos los nodos con la mediana como centro
+- Distancia media de todos los nodos con la caja envolvente como centro
+- Nombre del archivo
+
+**Hacen falta más**
 
