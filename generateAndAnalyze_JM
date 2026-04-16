@@ -22,29 +22,35 @@ from generateInstance2 import (
 @dataclass
 class Metrics:
     num_nodes: int
-    sqrt_num_nodes: float  # <--- NUEVA CARACTERÍSTICA
+    sqrt_num_nodes: float  
     num_edges: int
     vertices_param: int
     seed: str
     required_ratio: float
     convex_hull_area: float
-    bbox_area: float         # <--- NUEVA CARACTERÍSTICA
-    bbox_perimeter: float    # <--- NUEVA CARACTERÍSTICA
+    bbox_area: float         
+    bbox_perimeter: float    
     convex_hull_perimeter: float
     width: float
     height: float
-    avg_pairwise_dist_req: float  # <--- NUEVA CARACTERÍSTICA
-    avg_dist_depot_req: float      # <--- NUEVA CARACTERÍSTICA
-    dist_depot_bbox_center: float  # <--- NUEVA CARACTERÍSTICA
-    nodes_within_50p_radius: int   # <--- NUEVA CARACTERÍSTICA
-    nodes_within_75p_radius: int   # <--- NUEVA CARACTERÍSTICA
-    req_nodes_within_50p_radius: int  # <--- NUEVA CARACTERÍSTICA
-    req_nodes_within_75p_radius: int  # <--- NUEVA CARACTERÍSTICA
-    nodes_within_50p_bbox: int        # <--- NUEVA CARACTERÍSTICA
-    nodes_within_75p_bbox: int        # <--- NUEVA CARACTERÍSTICA
+    avg_pairwise_dist_req: float  
+    avg_dist_depot_req: float      
+    dist_depot_bbox_center: float  
+    nodes_within_50p_radius: int   
+    nodes_within_75p_radius: int   
+    req_nodes_within_50p_radius: int  
+    req_nodes_within_75p_radius: int  
+    nodes_within_50p_bbox: int        
+    nodes_within_75p_bbox: int        
     avg_dist_mean: float
     avg_dist_median: float
     avg_dist_bbox: float
+    graphml_path: str
+    dist_depot_to_hottest_cell: float
+    avg_dist_depot_to_active_cells: float
+    avg_dist_between_active_centroids: float
+    num_active_cells: int
+    std_dev_active_cells: float
     graphml_path: str
 
     def to_string(self) -> str:
@@ -96,6 +102,45 @@ def avg_distance_to_center(points: np.ndarray, center: np.ndarray) -> float:
     distances = np.sqrt((diffs ** 2).sum(axis=1))
     return float(distances.mean())
 
+def calculate_grid_metrics(g, points, depot_pos):
+    """Calcula todas las métricas de rejilla 10x10 de forma consolidada."""
+    # 1. Identificar aristas obligatorias
+    pos = {n: (float(d['x']), float(d['y'])) for n, d in g.nodes(data=True)}
+    req_edges = [e for e in g.edges(data=True) if int(e[2].get('required', e[2].get('d3', 0))) == 1]
+    
+    if not req_edges:
+        return 0.0, 0.0, 0.0, 0, 0.0
+
+    # 2. Definir límites y dimensiones de la rejilla
+    min_x, max_x = points[:, 0].min(), points[:, 0].max()
+    min_y, max_y = points[:, 1].min(), points[:, 1].max()
+    rx, ry = (max_x - min_x) or 1.0, (max_y - min_y) or 1.0
+
+    # 3. Mapeo de densidad y centros de celdas
+    grid_counts = np.zeros((10, 10))
+    active_centers = {}
+    
+    for u, v, _ in req_edges:
+        mx, my = (pos[u][0] + pos[v][0]) / 2, (pos[u][1] + pos[v][1]) / 2
+        col = min(int((mx - min_x) / rx * 10), 9)
+        row = min(int((my - min_y) / ry * 10), 9)
+        grid_counts[row, col] += 1
+        if (row, col) not in active_centers:
+            active_centers[(row, col)] = [min_x + (col + 0.5) * (rx / 10), 
+                                          min_y + (row + 0.5) * (ry / 10)]
+
+    # 4. Cálculos estadísticos
+    centers_arr = np.array(list(active_centers.values()))
+    max_idx = np.unravel_index(np.argmax(grid_counts), grid_counts.shape)
+    hottest_center = np.array(active_centers.get(max_idx, depot_pos))
+
+    dist_hottest = float(np.linalg.norm(depot_pos - hottest_center))
+    dist_active_mean = float(np.linalg.norm(centers_arr - depot_pos, axis=1).mean())
+    dist_between = float(pdist(centers_arr).mean()) if len(centers_arr) > 1 else 0.0
+    num_active = len(active_centers)
+    std_active = float(np.std(grid_counts[grid_counts > 0]))
+
+    return dist_hottest, dist_active_mean, dist_between, num_active, std_active
 
 def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) -> Metrics:
     """Extract geometric metrics from a generated graph instance."""
@@ -105,6 +150,7 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
     for _, data in g.nodes(data=True):
         positions.append((float(data["x"]), float(data["y"])))
     points = np.array(positions)
+    depot_pos = points[0]  # El depot siempre es el primer nodo
 
     hull = ConvexHull(points)
 
@@ -179,6 +225,8 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
     else:
         nodes_in_50p_bbox = 0
         nodes_in_75p_bbox = 0 # <--- MANEJO DE CASO VACÍO
+    grid_data = calculate_grid_metrics(g, points, depot_pos)
+    d_hottest, d_active_mean, d_between, n_active, s_active = grid_data
 
     return Metrics(
         num_nodes=g.number_of_nodes(),
@@ -202,6 +250,11 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
         req_nodes_within_75p_radius=req_in_75p,  # <--- GUARDADO DE LA MÉTRICA
         nodes_within_50p_bbox=nodes_in_50p_bbox,  # <--- GUARDADO DE LA MÉTRICA
         nodes_within_75p_bbox=nodes_in_75p_bbox,  # <--- GUARDADO DE LA MÉTRICA
+        dist_depot_to_hottest_cell=d_hottest,
+        avg_dist_depot_to_active_cells=d_active_mean,
+        avg_dist_between_active_centroids=d_between,
+        num_active_cells=n_active,
+        std_dev_active_cells=s_active,
         avg_dist_mean=avg_distance_to_center(points, c_mean),     # (Optimizamos usando variable temporal)
         avg_dist_median=avg_distance_to_center(points, c_median), # (Optimizamos usando variable temporal)
         avg_dist_bbox=avg_distance_to_center(points, c_bbox),     # (Optimizamos usando variable temporal)
