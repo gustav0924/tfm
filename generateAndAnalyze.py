@@ -5,7 +5,6 @@ from dataclasses import dataclass, fields
 from itertools import product
 from pathlib import Path
 from random import seed as set_seed
-from scipy.spatial.distance import pdist  # <--- Añadir esta importación al inicio del archivo
 import networkx as nx
 import numpy as np
 from scipy.spatial import ConvexHull
@@ -22,29 +21,27 @@ from generateInstance2 import (
 @dataclass
 class Metrics:
     num_nodes: int
-    sqrt_num_nodes: float  # <--- NUEVA CARACTERÍSTICA
     num_edges: int
     vertices_param: int
     seed: str
     required_ratio: float
     convex_hull_area: float
-    bbox_area: float         # <--- NUEVA CARACTERÍSTICA
-    bbox_perimeter: float    # <--- NUEVA CARACTERÍSTICA
     convex_hull_perimeter: float
     width: float
     height: float
-    avg_pairwise_dist_req: float  # <--- NUEVA CARACTERÍSTICA
-    avg_dist_depot_req: float      # <--- NUEVA CARACTERÍSTICA
-    dist_depot_bbox_center: float  # <--- NUEVA CARACTERÍSTICA
-    nodes_within_50p_radius: int   # <--- NUEVA CARACTERÍSTICA
-    nodes_within_75p_radius: int   # <--- NUEVA CARACTERÍSTICA
-    req_nodes_within_50p_radius: int  # <--- NUEVA CARACTERÍSTICA
-    req_nodes_within_75p_radius: int  # <--- NUEVA CARACTERÍSTICA
-    nodes_within_50p_bbox: int        # <--- NUEVA CARACTERÍSTICA
-    nodes_within_75p_bbox: int        # <--- NUEVA CARACTERÍSTICA
     avg_dist_mean: float
     avg_dist_median: float
     avg_dist_bbox: float
+    # topology and network
+    circuity_avg: float
+    prop_dead_ends: float
+    dist_min: float
+    dist_max: float
+    dist_mean: float
+    mst_odd_weight: float
+    num_req_edges: int
+    # complexity and projection
+    sammon_path: str
     graphml_path: str
 
     def to_string(self) -> str:
@@ -97,116 +94,123 @@ def avg_distance_to_center(points: np.ndarray, center: np.ndarray) -> float:
     return float(distances.mean())
 
 
+def build_distance_matrix(g: nx.Graph, node_list: list) -> np.ndarray:
+    """All-pairs shortest path distance matrix via Dijkstra (weight='length'), ordered by node_list."""
+    n = len(node_list)
+    node_idx = {node: i for i, node in enumerate(node_list)}
+    D = np.zeros((n, n))
+    for source, lengths in nx.all_pairs_dijkstra_path_length(g, weight='length'):
+        i = node_idx[source]
+        for target, dist in lengths.items():
+            j = node_idx[target]
+            D[i, j] = dist
+    return D
+
+
+def compute_circuity(D: np.ndarray, points: np.ndarray) -> float:
+    """Average ratio of network distance to Euclidean distance over all node pairs."""
+    i_idx, j_idx = np.triu_indices(len(points), k=1)
+    euc = np.linalg.norm(points[i_idx] - points[j_idx], axis=1)
+    net = D[i_idx, j_idx]
+    mask = (euc > 0) & (net > 0)
+    return float(np.mean(net[mask] / euc[mask])) if mask.any() else 0.0
+
+
+def compute_mst_odd_weight(g: nx.Graph) -> float:
+    """MST weight on the subgraph induced by odd-degree nodes of the required-edges subgraph."""
+    req_edges = [(u, v) for u, v, d in g.edges(data=True) if int(d.get('required', 0)) == 1]
+    if not req_edges:
+        return 0.0
+    sub_req = g.edge_subgraph(req_edges)
+    odd_nodes = [n for n, deg in sub_req.degree() if deg % 2 != 0]
+    if len(odd_nodes) < 2:
+        return 0.0
+    odd_subgraph = g.subgraph(odd_nodes)
+    if not nx.is_connected(odd_subgraph):
+        return 0.0
+    mst = nx.minimum_spanning_tree(odd_subgraph, weight='length')
+    return float(mst.size(weight='length'))
+
+
+def sammon_mapping(D: np.ndarray, n_iter: int = 300, lr: float = 0.3) -> np.ndarray:
+    """Sammon mapping: returns a (n, 2) array of 2D coordinates that preserve pairwise distances."""
+    n = D.shape[0]
+    rng = np.random.default_rng(42)
+    Y = rng.random((n, 2))
+    suma_D = np.sum(D)
+    if suma_D == 0:
+        return Y
+    D_safe = np.where(D == 0, 1e-10, D)
+    for _ in range(n_iter):
+        diff = Y[:, np.newaxis, :] - Y[np.newaxis, :, :]
+        d = np.sqrt(np.sum(diff ** 2, axis=2))
+        d_safe = np.where(d == 0, 1e-10, d)
+        factor = (D - d) / (D_safe * d_safe)
+        grad = -2.0 / suma_D * np.sum(factor[:, :, np.newaxis] * diff, axis=1)
+        Y -= lr * grad
+    return Y
+
+
 def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) -> Metrics:
-    """Extract geometric metrics from a generated graph instance."""
+    """Extract geometric and topological metrics from a generated graph instance."""
     g = nx.read_graphml(graphml_path)
 
+    node_list = []
     positions = []
-    for _, data in g.nodes(data=True):
+    for node, data in g.nodes(data=True):
+        node_list.append(node)
         positions.append((float(data["x"]), float(data["y"])))
     points = np.array(positions)
 
     hull = ConvexHull(points)
-
     min_x, max_x = points[:, 0].min(), points[:, 0].max()
     min_y, max_y = points[:, 1].min(), points[:, 1].max()
-# Calculamos ancho y alto una sola vez por eficiencia
-    val_width = max_x - min_x
-    val_height = max_y - min_y
 
-# 1. Identificar índices de los nodos que tocan aristas obligatorias
-    node_ids = list(g.nodes())
-    node_to_idx = {n: i for i, n in enumerate(node_ids)}
-    
-    req_indices = set()
-    for u, v, data in g.edges(data=True):
-        if int(data.get("required", 0)) == 1:
-            req_indices.add(node_to_idx[u])
-            req_indices.add(node_to_idx[v])
+    # all-pairs distance matrix — reused by circuity, distance stats, and Sammon mapping
+    D = build_distance_matrix(g, node_list)
 
-    # El depot siempre es el primer nodo
-    depot = points[0]  # <--- LO MOVEMOS AQUÍ AFUERA
+    circuity_avg = compute_circuity(D, points)
 
+    dead_ends = [n for n, d in g.degree() if d == 1]
+    prop_dead_ends = len(dead_ends) / g.number_of_nodes()
 
-# 1.5 Cálculos globales de densidad respecto al depot
-    dist_to_depot = np.linalg.norm(points[1:] - depot, axis=1)
-    if len(dist_to_depot) > 0:
-        max_radius = float(np.max(dist_to_depot))
-        nodes_in_50p = int(np.sum(dist_to_depot <= 0.5 * max_radius))
-        nodes_in_75p = int(np.sum(dist_to_depot <= 0.75 * max_radius)) # <--- NUEVO CÁLCULO
-    else:
-        nodes_in_50p = 0
-        nodes_in_75p = 0
+    upper = D[np.triu_indices(len(node_list), k=1)]
+    dist_min = float(upper.min()) if len(upper) > 0 else 0.0
+    dist_max = float(upper.max()) if len(upper) > 0 else 0.0
+    dist_mean_val = float(upper.mean()) if len(upper) > 0 else 0.0
 
+    mst_odd = compute_mst_odd_weight(g)
 
-  # 2. Cálculos sobre los nodos obligatorios (req_indices)
-    if len(req_indices) > 0:
-        req_points = points[list(req_indices)]
-        
-        if len(req_indices) > 1:
-            avg_pairwise_req = float(pdist(req_points).mean())
-        else:
-            avg_pairwise_req = 0.0
-            
-        avg_depot_req = float(np.linalg.norm(req_points - depot, axis=1).mean())
+    num_req_edges = sum(1 for _, _, d in g.edges(data=True) if int(d.get('required', 0)) == 1)
 
-        # Concentración de la demanda en su propio núcleo
-        c_req = req_points.mean(axis=0)
-        dist_req_to_c = np.linalg.norm(req_points - c_req, axis=1)
-        max_radius_req = float(np.max(dist_req_to_c))
-        
-        req_in_50p = int(np.sum(dist_req_to_c <= 0.5 * max_radius_req))
-        req_in_75p = int(np.sum(dist_req_to_c <= 0.75 * max_radius_req)) # <--- NUEVO CÁLCULO
-    else:
-        avg_pairwise_req = 0.0
-        avg_depot_req = 0.0
-        req_in_50p = 0
-        req_in_75p = 0   # <--- MANEJO DE CASO VACÍO
-
-    # 3. Cálculos de centros y distancias (optimizados)
-    c_bbox = bbox_center(points)
-    c_mean = mean_center(points)
-    c_median = median_center(points)
-    
-    dist_depot_bbox = float(np.linalg.norm(depot - c_bbox))
-
-   # Densidad central respecto a la caja envolvente (BBox)
-    dist_to_c_bbox = np.linalg.norm(points - c_bbox, axis=1)
-    if len(dist_to_c_bbox) > 0:
-        max_radius_bbox = float(np.max(dist_to_c_bbox))
-        nodes_in_50p_bbox = int(np.sum(dist_to_c_bbox <= 0.5 * max_radius_bbox))
-        nodes_in_75p_bbox = int(np.sum(dist_to_c_bbox <= 0.75 * max_radius_bbox)) # <--- NUEVO CÁLCULO
-    else:
-        nodes_in_50p_bbox = 0
-        nodes_in_75p_bbox = 0 # <--- MANEJO DE CASO VACÍO
+    sammon_coords = sammon_mapping(D)
+    sammon_file = str(Path(graphml_path).with_suffix('')) + '_sammon.npy'
+    np.save(sammon_file, sammon_coords)
 
     return Metrics(
         num_nodes=g.number_of_nodes(),
-        sqrt_num_nodes=float(np.sqrt(g.number_of_nodes())),
         num_edges=g.number_of_edges(),
         vertices_param=vertices_param,
         seed=str(seed_value),
         required_ratio=required_ratio,
         convex_hull_area=hull.volume,
         convex_hull_perimeter=hull.area,
-        bbox_area=float(val_width * val_height),
-        bbox_perimeter=float(2 * (val_width + val_height)),
-        width=val_width,
-        height=val_height,
-        avg_pairwise_dist_req=avg_pairwise_req,
-        avg_dist_depot_req=avg_depot_req,
-        dist_depot_bbox_center=dist_depot_bbox,  # <--- GUARDADO DE LA MÉTRICA
-        nodes_within_50p_radius=nodes_in_50p,    # <--- GUARDADO DE LA MÉTRICA
-        nodes_within_75p_radius=nodes_in_75p,    # <--- GUARDADO DE LA MÉTRICA
-        req_nodes_within_50p_radius=req_in_50p,  # <--- GUARDADO DE LA MÉTRICA
-        req_nodes_within_75p_radius=req_in_75p,  # <--- GUARDADO DE LA MÉTRICA
-        nodes_within_50p_bbox=nodes_in_50p_bbox,  # <--- GUARDADO DE LA MÉTRICA
-        nodes_within_75p_bbox=nodes_in_75p_bbox,  # <--- GUARDADO DE LA MÉTRICA
-        avg_dist_mean=avg_distance_to_center(points, c_mean),     # (Optimizamos usando variable temporal)
-        avg_dist_median=avg_distance_to_center(points, c_median), # (Optimizamos usando variable temporal)
-        avg_dist_bbox=avg_distance_to_center(points, c_bbox),     # (Optimizamos usando variable temporal)
+        width=max_x - min_x,
+        height=max_y - min_y,
+        avg_dist_mean=avg_distance_to_center(points, mean_center(points)),
+        avg_dist_median=avg_distance_to_center(points, median_center(points)),
+        avg_dist_bbox=avg_distance_to_center(points, bbox_center(points)),
+        circuity_avg=circuity_avg,
+        prop_dead_ends=prop_dead_ends,
+        dist_min=dist_min,
+        dist_max=dist_max,
+        dist_mean=dist_mean_val,
+        mst_odd_weight=mst_odd,
+        num_req_edges=num_req_edges,
+        sammon_path=os.path.basename(sammon_file),
         graphml_path=os.path.basename(graphml_path),
     )
+
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for graph generation and analysis."""
@@ -222,10 +226,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Main function to generate graph instances and extract metrics.
-    Missing: plotting functionality.
-    Missing features
-    """
+    """Main function to generate graph instances and extract metrics."""
     args = parse_args()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
