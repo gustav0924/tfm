@@ -3,6 +3,7 @@ from itertools import combinations
 import networkx as nx
 import numpy as np
 import pandas as pd
+from scipy.spatial import ConvexHull
 from scipy.spatial.distance import pdist
 
 
@@ -413,3 +414,82 @@ def calculate_edge_centroid_stats(g: nx.Graph) -> tuple[float, float, float]:
         std_req = 0.0
 
     return avg_all, avg_req, std_req
+
+
+def calculate_req_bbox_area(points: np.ndarray, req_indices: set) -> float:
+    """Área del bounding box de los nodos requeridos."""
+    if len(req_indices) < 2:
+        return 0.0
+    req_pts = points[list(req_indices)]
+    return float((req_pts[:, 0].max() - req_pts[:, 0].min()) * (req_pts[:, 1].max() - req_pts[:, 1].min()))
+
+
+def calculate_req_convex_hull_area(points: np.ndarray, req_indices: set) -> float:
+    """Área del casco convexo de los nodos requeridos."""
+    if len(req_indices) < 3:
+        return 0.0
+    req_pts = points[list(req_indices)]
+    try:
+        return float(ConvexHull(req_pts).volume)
+    except Exception:
+        return 0.0
+
+
+def calculate_avg_dist_point_to_centroids(point: np.ndarray, centroids: np.ndarray) -> float:
+    """Distancia promedio desde un punto dado hasta cada centroide de aristas."""
+    if len(centroids) == 0:
+        return 0.0
+    return float(np.linalg.norm(centroids - point, axis=1).mean())
+
+
+def calculate_std_bearings(points: np.ndarray, center: np.ndarray) -> float:
+    """Desviación estándar de los ángulos de orientación (bearings) desde un punto central a todos los nodos."""
+    diffs = points - center
+    bearings = np.arctan2(diffs[:, 1], diffs[:, 0])
+    return float(np.std(bearings))
+
+
+def calculate_std_distances(points: np.ndarray, center: np.ndarray) -> float:
+    """Desviación estándar de las distancias euclidianas desde un punto central a todos los nodos."""
+    dists = np.linalg.norm(points - center, axis=1)
+    return float(np.std(dists))
+
+
+def calculate_xy_spread(points: np.ndarray) -> tuple[float, float]:
+    """Promedio y producto de las desviaciones estándar en X e Y de las posiciones de los nodos.
+
+    Retorna (avg_std_xy, prod_std_xy).
+    """
+    std_x = float(np.std(points[:, 0]))
+    std_y = float(np.std(points[:, 1]))
+    return (std_x + std_y) / 2.0, std_x * std_y
+
+
+def calculate_edge_density(g: nx.Graph, points: np.ndarray) -> float:
+    """Densidad de aristas: número de aristas por unidad de área (bounding box)."""
+    min_x, max_x = points[:, 0].min(), points[:, 0].max()
+    min_y, max_y = points[:, 1].min(), points[:, 1].max()
+    area = (max_x - min_x) * (max_y - min_y)
+    return float(g.number_of_edges() / area) if area > 0 else 0.0
+
+
+def calculate_std_dist_odd_nodes(D: np.ndarray, odd_indices: list) -> float:
+    """Desviación estándar de las distancias de caminos mínimos entre nodos de grado impar del subgrafo requerido."""
+    if len(odd_indices) < 2:
+        return 0.0
+    sub = D[np.ix_(odd_indices, odd_indices)]
+    upper = sub[np.triu_indices(len(odd_indices), k=1)]
+    return float(upper.std()) if len(upper) > 0 else 0.0
+
+
+def calculate_prop_odd_req_nodes(g: nx.Graph) -> float:
+    """Proporción de nodos con grado impar en el subgrafo de aristas requeridas."""
+    req_edges = [(u, v) for u, v, d in g.edges(data=True) if int(d.get('required', d.get('d3', 0))) == 1]
+    if not req_edges:
+        return 0.0
+    sub_req = g.edge_subgraph(req_edges)
+    n = sub_req.number_of_nodes()
+    if n == 0:
+        return 0.0
+    odd = sum(1 for _, deg in sub_req.degree() if deg % 2 != 0)
+    return float(odd / n)
