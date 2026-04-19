@@ -66,7 +66,6 @@ from computations import (
 @dataclass
 class Metrics:
     num_nodes: int
-    sqrt_num_nodes: float
     num_edges: int
     vertices_param: int
     seed: str
@@ -371,10 +370,8 @@ def calculate_req_edge_length_stats(g):
 def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) -> Metrics:
     g = nx.read_graphml(graphml_path)
 
-    node_list = []
     positions = []
-    for node, data in g.nodes(data=True):
-        node_list.append(node)
+    for _, data in g.nodes(data=True):
         positions.append((float(data["x"]), float(data["y"])))
     points = np.array(positions)
 
@@ -435,6 +432,8 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
     _, sammon_error_val = sammon_mapping(D)
     sammon_layout_error_val = calculate_sammon_error(g, points)
 
+    depot_pos = points[0]
+ 
     dist_hottest_10 = calculate_dist_depot_to_hottest_cell(g, points, depot_pos, grid_size=10)
     dist_hottest_15 = calculate_dist_depot_to_hottest_cell(g, points, depot_pos, grid_size=15)
     avg_dist_active_10 = calculate_avg_dist_depot_to_active_cells(g, points, depot_pos, grid_size=10)
@@ -450,7 +449,6 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
 
     return Metrics(
         num_nodes=g.number_of_nodes(),
-        sqrt_num_nodes=float(np.sqrt(g.number_of_nodes())),
         num_edges=g.number_of_edges(),
         vertices_param=vertices_param,
         seed=str(seed_value),
