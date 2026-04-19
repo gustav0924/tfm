@@ -40,11 +40,13 @@ python generateAndAnalyze.py \
 
 | Argumento | Requerido | Default | Descripción |
 |---|---|---|---|
-| `--vertices` | Yes | - | Lista cantidad de vértices (un espacio por valor) |
+| `--mode` | No | `generate` | `generate` = crea instancias nuevas; `analyze` = analiza GraphMLs existentes |
+| `--input-dir` | No | `mapas` | Carpeta con GraphMLs existentes (solo modo `analyze`) |
+| `--vertices` | Solo `generate` | - | Lista cantidad de vértices (un espacio por valor) |
 | `--seeds` | No | `0` | Lista con random seeds (un espacio por valor) |
-| `--required` | Yes | - | Lista con ejes requeridos porcentualmente 0-100 (un espacio por valor) |
+| `--required` | Solo `generate` | - | Lista con ejes requeridos porcentualmente 0-100 (un espacio por valor) |
 | `--generator` | No | `1` | `1` = proximity/planar, `2` = Delaunay |
-| `--output-dir` | No | `instances` | Carpeta para generar archivos GraphML |
+| `--output-dir` | No | `instances` | Carpeta para generar/copiar archivos GraphML |
 | `--csv` | No | - | Directorio de salida para CSV (`;` -separación) |
 
 El script genera todas las combinaciones de los `vertices x seeds x required`, siendo `--vertices 10 20 --seeds 0 1 2 --required 30 50` produce 2 x 3 x 2 = 12 instancias.
@@ -67,7 +69,7 @@ Métricas impresas separadas por ";", seguido de una tabla:
 
 Ejemplo:
 ```
-num_nodes;num_edges;vertices_param;seed;required_ratio;convex_hull_area;convex_hull_perimeter;width;height;graphml_path
+num_nodes;sqrt_num_nodes;num_edges;...;avg_dist_all_edge_centroids;avg_dist_req_edge_centroids;std_dist_req_edge_centroids;graphml_path
 ```
 
 #### Archivo CSV (Opcional)
@@ -119,12 +121,23 @@ Mismas columnas que output de consola separadas por `;`. Guardado en el director
 | `dist_min` | Distancia mínima entre pares (caminos más cortos) |
 | `dist_max` | Distancia máxima entre pares (caminos más cortos) |
 | `dist_mean` | Distancia media entre pares (caminos más cortos) |
+| `dist_total_median` | Mediana de distancias entre pares (caminos más cortos) |
+| `dist_total_std` | Desviación estándar de distancias entre pares (caminos más cortos) |
+| `dist_req_min` | Distancia mínima entre pares de nodos obligatorios |
+| `dist_req_max` | Distancia máxima entre pares de nodos obligatorios |
+| `dist_req_mean` | Distancia media entre pares de nodos obligatorios |
+| `dist_req_median` | Mediana de distancias entre pares de nodos obligatorios |
+| `dist_req_std` | Desviación estándar de distancias entre pares de nodos obligatorios |
+| `min_dist_depot_to_req` | Distancia mínima en red desde el depot hasta cualquier nodo obligatorio |
 | `mst_odd_weight` | Peso del MST sobre nodos de grado impar del subgrafo obligatorio |
 | `num_req_edges` | Cantidad de aristas obligatorias |
-| `sammon_path` | Ruta del archivo de coordenadas Sammon (`.npy`) |
-| `sammon_error` | Error de distorsión Sammon (red vs. plano 2D) |
+| `sammon_error` | Error de distorsión Sammon (proyección 2D vs distancias en red) |
+| `sammon_layout_error` | Error de Sammon del layout original (posiciones 2D del grafo vs distancias en red) |
 | `req_edges_mean` | Media de la longitud de aristas obligatorias |
 | `req_edges_median` | Mediana de la longitud de aristas obligatorias |
 | `req_edges_std` | Desviación estándar de la longitud de aristas obligatorias |
+| `avg_dist_all_edge_centroids` | Distancia media entre centroides de todas las aristas |
+| `avg_dist_req_edge_centroids` | Distancia media entre centroides de aristas obligatorias |
+| `std_dist_req_edge_centroids` | Desviación estándar de distancias entre centroides de aristas obligatorias |
 | `graphml_path` | Nombre del archivo GraphML generado |
 
