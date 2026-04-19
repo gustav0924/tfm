@@ -8,7 +8,6 @@ from random import seed as set_seed
 import networkx as nx
 import numpy as np
 from scipy.spatial import ConvexHull
-from scipy.spatial.distance import pdist
 from generateInstance import generateGraph, has_single_strong_component, testGraph, to_networkx
 from generateInstance2 import (
     assign_required,
@@ -25,9 +24,17 @@ from computations import (
     calculate_avg_dist_depot_to_active_cells,
     calculate_avg_internal_dist_cells,
     calculate_dist_depot_to_hottest_cell,
+    calculate_distance_matrix_stats,
+    calculate_min_depot_to_req,
     calculate_node_density,
+    calculate_nodes_within_radius_fractions,
+    calculate_prop_dead_ends,
+    calculate_req_distance_stats,
     calculate_req_edge_length_stats,
     calculate_req_node_degrees,
+    calculate_edge_centroid_stats,
+    calculate_req_spatial_stats,
+    calculate_sammon_error,
     compute_circuity,
     compute_mst_odd_weight,
     mean_center,
@@ -76,28 +83,27 @@ class Metrics:
     num_odd_req_nodes: int
     circuity_avg: float
     prop_dead_ends: float
-    # total graph distance stats
     dist_min: float
     dist_max: float
     dist_mean: float
     dist_total_median: float
     dist_total_std: float
-    # required subset distance stats
     dist_req_min: float
     dist_req_max: float
     dist_req_mean: float
     dist_req_median: float
     dist_req_std: float
-    # depot proximity
     min_dist_depot_to_req: float
     mst_odd_weight: float
     num_req_edges: int
-    # complexity and projection
-    sammon_path: str
     sammon_error: float
+    sammon_layout_error: float
     req_edges_mean: float
     req_edges_median: float
     req_edges_std: float
+    avg_dist_all_edge_centroids: float
+    avg_dist_req_edge_centroids: float
+    std_dist_req_edge_centroids: float
     graphml_path: str
 
     def to_string(self) -> str:
@@ -156,32 +162,11 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
             req_indices.add(node_to_idx[u])
             req_indices.add(node_to_idx[v])
 
-    dist_to_depot = np.linalg.norm(points[1:] - depot, axis=1)
-    if len(dist_to_depot) > 0:
-        max_radius = float(np.max(dist_to_depot))
-        nodes_in_50p = int(np.sum(dist_to_depot <= 0.5 * max_radius))
-        nodes_in_75p = int(np.sum(dist_to_depot <= 0.75 * max_radius))
-    else:
-        nodes_in_50p = 0
-        nodes_in_75p = 0
+    nodes_in_50p, nodes_in_75p = calculate_nodes_within_radius_fractions(points, depot, [0.5, 0.75])
 
-    if len(req_indices) > 0:
-        req_points = points[list(req_indices)]
-        if len(req_indices) > 1:
-            avg_pairwise_req = float(pdist(req_points).mean())
-        else:
-            avg_pairwise_req = 0.0
-        avg_depot_req = float(np.linalg.norm(req_points - depot, axis=1).mean())
-        c_req = req_points.mean(axis=0)
-        dist_req_to_c = np.linalg.norm(req_points - c_req, axis=1)
-        max_radius_req = float(np.max(dist_req_to_c))
-        req_in_50p = int(np.sum(dist_req_to_c <= 0.5 * max_radius_req))
-        req_in_75p = int(np.sum(dist_req_to_c <= 0.75 * max_radius_req))
-    else:
-        avg_pairwise_req = 0.0
-        avg_depot_req = 0.0
-        req_in_50p = 0
-        req_in_75p = 0
+    avg_pairwise_req, avg_depot_req, req_in_50p, req_in_75p = calculate_req_spatial_stats(
+        points, req_indices, depot
+    )
 
     c_bbox = bbox_center(points)
     c_mean = mean_center(points)
@@ -189,49 +174,29 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
 
     dist_depot_bbox = float(np.linalg.norm(depot - c_bbox))
 
-    dist_to_c_bbox = np.linalg.norm(points - c_bbox, axis=1)
-    if len(dist_to_c_bbox) > 0:
-        max_radius_bbox = float(np.max(dist_to_c_bbox))
-        nodes_in_50p_bbox = int(np.sum(dist_to_c_bbox <= 0.5 * max_radius_bbox))
-        nodes_in_75p_bbox = int(np.sum(dist_to_c_bbox <= 0.75 * max_radius_bbox))
-    else:
-        nodes_in_50p_bbox = 0
-        nodes_in_75p_bbox = 0
+    nodes_in_50p_bbox, nodes_in_75p_bbox = calculate_nodes_within_radius_fractions(
+        points, c_bbox, [0.5, 0.75]
+    )
 
     D = build_distance_matrix(g, node_list)
 
     circuity_avg = compute_circuity(D, points)
 
-    dead_ends = [n for n, d in g.degree() if d == 1]
-    prop_dead_ends = len(dead_ends) / g.number_of_nodes()
+    prop_dead_ends = calculate_prop_dead_ends(g)
 
     # total graph distance stats (upper triangle of D)
-    upper = D[np.triu_indices(len(node_list), k=1)]
-    dist_min = float(upper.min()) if len(upper) > 0 else 0.0
-    dist_max = float(upper.max()) if len(upper) > 0 else 0.0
-    dist_mean_val = float(upper.mean()) if len(upper) > 0 else 0.0
-    dist_total_median = float(np.median(upper)) if len(upper) > 0 else 0.0
-    dist_total_std = float(upper.std()) if len(upper) > 0 else 0.0
+    dist_min, dist_max, dist_mean_val, dist_total_median, dist_total_std = calculate_distance_matrix_stats(
+        D, node_list
+    )
 
-    # required subset distance stats — sub-matrix indexed by required-node indices
+    # required subset distance stats
     req_indices_sorted = sorted(req_indices)
-    if len(req_indices_sorted) >= 2:
-        D_req = D[np.ix_(req_indices_sorted, req_indices_sorted)]
-        upper_req = D_req[np.triu_indices(len(req_indices_sorted), k=1)]
-        dist_req_min = float(upper_req.min())
-        dist_req_max = float(upper_req.max())
-        dist_req_mean = float(upper_req.mean())
-        dist_req_median = float(np.median(upper_req))
-        dist_req_std = float(upper_req.std())
-    else:
-        dist_req_min = dist_req_max = dist_req_mean = dist_req_median = dist_req_std = 0.0
+    dist_req_min, dist_req_max, dist_req_mean, dist_req_median, dist_req_std = calculate_req_distance_stats(
+        D, req_indices_sorted
+    )
 
     # depot proximity: minimum network distance from node 0 to any required node
-    depot_idx = 0
-    if req_indices_sorted:
-        min_dist_depot_to_req = float(D[depot_idx, req_indices_sorted].min())
-    else:
-        min_dist_depot_to_req = 0.0
+    min_dist_depot_to_req = calculate_min_depot_to_req(D, req_indices_sorted)
 
     # MST on odd-degree nodes using full shortest-path distances
     req_edge_list = [(u, v) for u, v, d in g.edges(data=True) if int(d.get('required', 0)) == 1]
@@ -245,9 +210,8 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
 
     num_req_edges = len(req_edge_list)
 
-    sammon_coords, sammon_error_val = sammon_mapping(D)
-    sammon_file = str(Path(graphml_path).with_suffix('')) + '_sammon.npy'
-    np.save(sammon_file, sammon_coords)
+    _, sammon_error_val = sammon_mapping(D)
+    sammon_layout_error_val = calculate_sammon_error(g, points)
 
     dist_hottest_10 = calculate_dist_depot_to_hottest_cell(g, points, depot_pos, grid_size=10)
     dist_hottest_15 = calculate_dist_depot_to_hottest_cell(g, points, depot_pos, grid_size=15)
@@ -260,6 +224,7 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
     node_density_val = calculate_node_density(points)
     num_req_val, num_even_req_val, num_odd_req_val = calculate_req_node_degrees(g)
     req_mean_val, req_median_val, req_std_val = calculate_req_edge_length_stats(g)
+    avg_all_centroids, avg_req_centroids, std_req_centroids = calculate_edge_centroid_stats(g)
 
     return Metrics(
         num_nodes=g.number_of_nodes(),
@@ -313,24 +278,92 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
         min_dist_depot_to_req=min_dist_depot_to_req,
         mst_odd_weight=mst_odd,
         num_req_edges=num_req_edges,
-        sammon_path=os.path.basename(sammon_file),
         sammon_error=sammon_error_val,
+        sammon_layout_error=sammon_layout_error_val,
         req_edges_mean=req_mean_val,
         req_edges_median=req_median_val,
         req_edges_std=req_std_val,
+        avg_dist_all_edge_centroids=avg_all_centroids,
+        avg_dist_req_edge_centroids=avg_req_centroids,
+        std_dist_req_edge_centroids=std_req_centroids,
         graphml_path=os.path.basename(graphml_path),
     )
+
+
+def normalize_graph(g: nx.Graph) -> nx.Graph:
+    """Normaliza atributos de aristas para compatibilidad con extract_metrics.
+
+    Los grafos reales (ej. mapas OSM) usan 'demand' en lugar de 'required'.
+    Esta función agrega el atributo 'required' a cada arista que no lo tenga,
+    derivándolo de 'demand': demand > 0 → required=1, demand == 0 → required=0.
+    Si tampoco existe 'demand', se asigna required=0 por defecto.
+    """
+    for _, _, data in g.edges(data=True):
+        if 'required' not in data:
+            data['required'] = 1 if int(data.get('demand', 0)) > 0 else 0
+    return g
+
+
+def analyze_existing(input_dir: Path, output_dir: Path, csv_path: str | None) -> None:
+    """Analiza instancias GraphML existentes en input_dir sin generar nuevas instancias.
+
+    Antes de llamar a extract_metrics, cada grafo pasa por normalize_graph,
+    que traduce el atributo 'demand' al atributo 'required' esperado por extract_metrics
+    (demand > 0 → required=1). El grafo normalizado se escribe en output_dir
+    para que extract_metrics pueda leerlo desde disco.
+    """
+    graphml_files = sorted(input_dir.glob('*.graphml'))
+    if not graphml_files:
+        print(f"No se encontraron archivos .graphml en '{input_dir}/'")
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    total = len(graphml_files)
+
+    for i, src_path in enumerate(graphml_files, 1):
+        dst_path = output_dir / src_path.name
+        print(f"[{i}/{total}] Analizando {src_path.name} ... ", end="", flush=True)
+
+        g = nx.read_graphml(str(src_path))
+        normalize_graph(g)
+        nx.write_graphml(g, str(dst_path))
+
+        num_edges = g.number_of_edges()
+        req_edges = sum(1 for _, _, d in g.edges(data=True) if int(d.get('required', 0)) == 1)
+        required_ratio = req_edges / num_edges if num_edges > 0 else 0.0
+
+        metrics = extract_metrics(str(dst_path), g.number_of_nodes(), src_path.stem, required_ratio)
+        results.append(metrics)
+        print(metrics.to_string())
+
+    header = ";".join(f.name for f in fields(Metrics))
+    print(f"\n{header}")
+    for m in results:
+        print(m.to_string())
+
+    if csv_path:
+        field_names = [f.name for f in fields(Metrics)]
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=field_names, delimiter=";")
+            writer.writeheader()
+            for m in results:
+                writer.writerow({fn: getattr(m, fn) for fn in field_names})
+        print(f"\nMétricas exportadas a '{csv_path}'")
 
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments for graph generation and analysis."""
     parser = argparse.ArgumentParser(description="Generate multiple graph instances and extract geometric metrics.")
-    parser.add_argument("--vertices", nargs="+", type=int, required=True, help="List of vertex counts.")
-    parser.add_argument("--seeds", nargs="+", default=["0"], help="List of random seeds.")
-    parser.add_argument("--required", nargs="+", type=float, required=True, help="List of required-edge percentages (0-100).")
+    parser.add_argument("--mode", choices=["generate", "analyze"], default="generate",
+                        help="'generate' crea nuevas instancias; 'analyze' analiza GraphMLs existentes.")
+    parser.add_argument("--input-dir", default="mapas", help="Directorio con GraphMLs existentes (modo analyze).")
+    parser.add_argument("--vertices", nargs="+", type=int, help="List of vertex counts (modo generate).")
+    parser.add_argument("--seeds", nargs="+", default=["0"], help="List of random seeds (modo generate).")
+    parser.add_argument("--required", nargs="+", type=float, help="List of required-edge percentages 0-100 (modo generate).")
     parser.add_argument("--generator", type=int, choices=[1, 2], default=1,
                         help="1 = proximity/planar (generateInstance), 2 = Delaunay (generateInstance2).")
-    parser.add_argument("--output-dir", default="instances", help="Directory for generated GraphML files.")
+    parser.add_argument("--output-dir", default="instances", help="Directory for generated/copied GraphML files.")
     parser.add_argument("--csv", default=None, help="Output CSV path for metrics.")
     return parser.parse_args()
 
@@ -339,6 +372,15 @@ def main() -> None:
     """Main function to generate graph instances and extract metrics."""
     args = parse_args()
     output_dir = Path(args.output_dir)
+
+    if args.mode == "analyze":
+        analyze_existing(Path(args.input_dir), output_dir, args.csv)
+        return
+
+    if not args.vertices or not args.required:
+        print("Error: --vertices y --required son obligatorios en modo generate.")
+        return
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     ratios = []
