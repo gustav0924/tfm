@@ -28,7 +28,6 @@ from computations import (
     calculate_node_density,
     calculate_req_edge_length_stats,
     calculate_req_node_degrees,
-    calculate_sammon_error,
     compute_circuity,
     compute_mst_odd_weight,
     mean_center,
@@ -77,11 +76,23 @@ class Metrics:
     num_odd_req_nodes: int
     circuity_avg: float
     prop_dead_ends: float
+    # total graph distance stats
     dist_min: float
     dist_max: float
     dist_mean: float
+    dist_total_median: float
+    dist_total_std: float
+    # required subset distance stats
+    dist_req_min: float
+    dist_req_max: float
+    dist_req_mean: float
+    dist_req_median: float
+    dist_req_std: float
+    # depot proximity
+    min_dist_depot_to_req: float
     mst_odd_weight: float
     num_req_edges: int
+    # complexity and projection
     sammon_path: str
     sammon_error: float
     req_edges_mean: float
@@ -194,16 +205,47 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
     dead_ends = [n for n, d in g.degree() if d == 1]
     prop_dead_ends = len(dead_ends) / g.number_of_nodes()
 
+    # total graph distance stats (upper triangle of D)
     upper = D[np.triu_indices(len(node_list), k=1)]
     dist_min = float(upper.min()) if len(upper) > 0 else 0.0
     dist_max = float(upper.max()) if len(upper) > 0 else 0.0
     dist_mean_val = float(upper.mean()) if len(upper) > 0 else 0.0
+    dist_total_median = float(np.median(upper)) if len(upper) > 0 else 0.0
+    dist_total_std = float(upper.std()) if len(upper) > 0 else 0.0
 
-    mst_odd = compute_mst_odd_weight(g)
+    # required subset distance stats — sub-matrix indexed by required-node indices
+    req_indices_sorted = sorted(req_indices)
+    if len(req_indices_sorted) >= 2:
+        D_req = D[np.ix_(req_indices_sorted, req_indices_sorted)]
+        upper_req = D_req[np.triu_indices(len(req_indices_sorted), k=1)]
+        dist_req_min = float(upper_req.min())
+        dist_req_max = float(upper_req.max())
+        dist_req_mean = float(upper_req.mean())
+        dist_req_median = float(np.median(upper_req))
+        dist_req_std = float(upper_req.std())
+    else:
+        dist_req_min = dist_req_max = dist_req_mean = dist_req_median = dist_req_std = 0.0
 
-    num_req_edges = sum(1 for _, _, d in g.edges(data=True) if int(d.get('required', 0)) == 1)
+    # depot proximity: minimum network distance from node 0 to any required node
+    depot_idx = 0
+    if req_indices_sorted:
+        min_dist_depot_to_req = float(D[depot_idx, req_indices_sorted].min())
+    else:
+        min_dist_depot_to_req = 0.0
 
-    sammon_coords = sammon_mapping(D)
+    # MST on odd-degree nodes using full shortest-path distances
+    req_edge_list = [(u, v) for u, v, d in g.edges(data=True) if int(d.get('required', 0)) == 1]
+    if req_edge_list:
+        sub_req = g.edge_subgraph(req_edge_list)
+        odd_nodes = [n for n, deg in sub_req.degree() if deg % 2 != 0]
+        odd_indices = [node_to_idx[n] for n in odd_nodes]
+    else:
+        odd_indices = []
+    mst_odd = compute_mst_odd_weight(D, odd_indices)
+
+    num_req_edges = len(req_edge_list)
+
+    sammon_coords, sammon_error_val = sammon_mapping(D)
     sammon_file = str(Path(graphml_path).with_suffix('')) + '_sammon.npy'
     np.save(sammon_file, sammon_coords)
 
@@ -217,7 +259,6 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
     avg_dist_centroids_15 = calculate_avg_dist_between_centroids(points, grid_size=15)
     node_density_val = calculate_node_density(points)
     num_req_val, num_even_req_val, num_odd_req_val = calculate_req_node_degrees(g)
-    sammon_val = calculate_sammon_error(g, points)
     req_mean_val, req_median_val, req_std_val = calculate_req_edge_length_stats(g)
 
     return Metrics(
@@ -262,10 +303,18 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
         dist_min=dist_min,
         dist_max=dist_max,
         dist_mean=dist_mean_val,
+        dist_total_median=dist_total_median,
+        dist_total_std=dist_total_std,
+        dist_req_min=dist_req_min,
+        dist_req_max=dist_req_max,
+        dist_req_mean=dist_req_mean,
+        dist_req_median=dist_req_median,
+        dist_req_std=dist_req_std,
+        min_dist_depot_to_req=min_dist_depot_to_req,
         mst_odd_weight=mst_odd,
         num_req_edges=num_req_edges,
         sammon_path=os.path.basename(sammon_file),
-        sammon_error=sammon_val,
+        sammon_error=sammon_error_val,
         req_edges_mean=req_mean_val,
         req_edges_median=req_median_val,
         req_edges_std=req_std_val,

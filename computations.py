@@ -1,7 +1,9 @@
-from scipy.spatial.distance import pdist
+from itertools import combinations
+
 import networkx as nx
 import numpy as np
 import pandas as pd
+from scipy.spatial.distance import pdist
 
 
 def mean_center(points: np.ndarray) -> np.ndarray:
@@ -48,30 +50,30 @@ def compute_circuity(D: np.ndarray, points: np.ndarray) -> float:
     return float(np.mean(net[mask] / euc[mask])) if mask.any() else 0.0
 
 
-def compute_mst_odd_weight(g: nx.Graph) -> float:
-    """MST weight on the subgraph induced by odd-degree nodes of the required-edges subgraph."""
-    req_edges = [(u, v) for u, v, d in g.edges(data=True) if int(d.get('required', 0)) == 1]
-    if not req_edges:
+def compute_mst_odd_weight(D: np.ndarray, odd_indices: list) -> float:
+    """MST weight over a complete graph of odd-degree nodes using shortest-path distances from D."""
+    if len(odd_indices) < 2:
         return 0.0
-    sub_req = g.edge_subgraph(req_edges)
-    odd_nodes = [n for n, deg in sub_req.degree() if deg % 2 != 0]
-    if len(odd_nodes) < 2:
-        return 0.0
-    odd_subgraph = g.subgraph(odd_nodes)
-    if not nx.is_connected(odd_subgraph):
-        return 0.0
-    mst = nx.minimum_spanning_tree(odd_subgraph, weight='length')
+    h = nx.Graph()
+    for a, b in combinations(range(len(odd_indices)), 2):
+        i, j = odd_indices[a], odd_indices[b]
+        h.add_edge(a, b, length=float(D[i, j]))
+    mst = nx.minimum_spanning_tree(h, weight='length')
     return float(mst.size(weight='length'))
 
 
-def sammon_mapping(D: np.ndarray, n_iter: int = 300, lr: float = 0.3) -> np.ndarray:
-    """Sammon mapping: returns a (n, 2) array of 2D coordinates that preserve pairwise distances."""
+def sammon_mapping(D: np.ndarray, n_iter: int = 300, lr: float = 0.3) -> tuple[np.ndarray, float]:
+    """Sammon mapping: returns 2D coordinates and normalized projection stress error.
+
+    The stress error is the normalized sum of squared differences between D and
+    the Euclidean distances in the 2D projection — lower values mean better fit.
+    """
     n = D.shape[0]
     rng = np.random.default_rng(42)
     Y = rng.random((n, 2))
     suma_D = np.sum(D)
     if suma_D == 0:
-        return Y
+        return Y, 0.0
     D_safe = np.where(D == 0, 1e-10, D)
     for _ in range(n_iter):
         diff = Y[:, np.newaxis, :] - Y[np.newaxis, :, :]
@@ -80,7 +82,13 @@ def sammon_mapping(D: np.ndarray, n_iter: int = 300, lr: float = 0.3) -> np.ndar
         factor = (D - d) / (D_safe * d_safe)
         grad = -2.0 / suma_D * np.sum(factor[:, :, np.newaxis] * diff, axis=1)
         Y -= lr * grad
-    return Y
+    # normalized stress: sum((D - d)^2) / sum(D^2) over upper triangle
+    i_idx, j_idx = np.triu_indices(n, k=1)
+    d_final = np.sqrt(np.sum((Y[i_idx] - Y[j_idx]) ** 2, axis=1))
+    D_upper = D[i_idx, j_idx]
+    denom = np.sum(D_upper ** 2)
+    error = float(np.sum((D_upper - d_final) ** 2) / denom) if denom > 0 else 0.0
+    return Y, error
 
 
 def calculate_dist_depot_to_hottest_cell(g, points, depot_pos, grid_size):
@@ -215,28 +223,6 @@ def calculate_req_node_degrees(g):
     odd_count = sum(1 for n, d in sub_req.degree() if d % 2 != 0)
 
     return total_count, even_count, odd_count
-
-
-def calculate_sammon_error(g, points):
-    """Sammon error: distortion between network shortest-path distances and 2D Euclidean distances."""
-    n = len(points)
-    if n < 2:
-        return 0.0
-
-    try:
-        D_matrix = nx.floyd_warshall_numpy(g, nodelist=range(n), weight='length')
-        D = np.asarray(D_matrix)
-    except Exception:
-        return 0.0
-
-    diff = points[:, np.newaxis, :] - points[np.newaxis, :, :]
-    d = np.sqrt(np.sum(diff ** 2, axis=2))
-
-    mask = D > 0
-    E = np.sum(np.where(mask, (D - d) ** 2 / np.where(mask, D, 1.0), 0.0))
-    den = np.sum(D) / 2.0
-
-    return float(E / den) if den > 0 else 0.0
 
 
 def calculate_req_edge_length_stats(g):
