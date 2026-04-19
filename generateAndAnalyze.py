@@ -10,7 +10,6 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import ConvexHull
 from scipy.spatial.distance import pdist
-
 from generateInstance import generateGraph, has_single_strong_component, testGraph, to_networkx
 from generateInstance2 import (
     assign_required,
@@ -18,6 +17,24 @@ from generateInstance2 import (
     generate_vertices,
     has_single_strong_component as has_single_strong_component2,
     to_networkx as to_networkx2,
+)
+from computations import (
+    avg_distance_to_center,
+    bbox_center,
+    build_distance_matrix,
+    calculate_avg_dist_between_centroids,
+    calculate_avg_dist_depot_to_active_cells,
+    calculate_avg_internal_dist_cells,
+    calculate_dist_depot_to_hottest_cell,
+    calculate_node_density,
+    calculate_req_edge_length_stats,
+    calculate_req_node_degrees,
+    calculate_sammon_error,
+    compute_circuity,
+    compute_mst_odd_weight,
+    mean_center,
+    median_center,
+    sammon_mapping,
 )
 
 from computations import (
@@ -408,7 +425,6 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
             avg_pairwise_req = float(pdist(req_points).mean())
         else:
             avg_pairwise_req = 0.0
-            
         avg_depot_req = float(np.linalg.norm(req_points - depot, axis=1).mean())
         c_req = req_points.mean(axis=0)
         dist_req_to_c = np.linalg.norm(req_points - c_req, axis=1)
