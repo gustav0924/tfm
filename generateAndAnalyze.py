@@ -312,27 +312,6 @@ def extract_metrics(graphml_path, vertices_param, seed_value, required_ratio) ->
     # Edge centroid stats
     avg_all_centroids, avg_req_centroids, std_req_centroids = calculate_edge_centroid_stats(g)
 
-    # all-pairs distance matrix — reused by circuity, distance stats, and Sammon mapping
-    D = build_distance_matrix(g, node_list)
-
-    circuity_avg = compute_circuity(D, points)
-
-    dead_ends = [n for n, d in g.degree() if d == 1]
-    prop_dead_ends = len(dead_ends) / g.number_of_nodes()
-
-    upper = D[np.triu_indices(len(node_list), k=1)]
-    dist_min = float(upper.min()) if len(upper) > 0 else 0.0
-    dist_max = float(upper.max()) if len(upper) > 0 else 0.0
-    dist_mean_val = float(upper.mean()) if len(upper) > 0 else 0.0
-
-    mst_odd = compute_mst_odd_weight(g)
-
-    num_req_edges = sum(1 for _, _, d in g.edges(data=True) if int(d.get('required', 0)) == 1)
-
-    sammon_coords = sammon_mapping(D)
-    sammon_file = str(Path(graphml_path).with_suffix('')) + '_sammon.npy'
-    np.save(sammon_file, sammon_coords)
-
     return Metrics(
         num_nodes=g.number_of_nodes(),
         sqrt_num_nodes=float(np.sqrt(g.number_of_nodes())),
